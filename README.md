@@ -19,7 +19,7 @@ This project is licensed under the terms of the **MIT License**. See the [LICENS
 
 ## Privacy Policy
 
-Please review our [Privacy Policy](PRIVACY_POLICY.md) for more details on how we handle user data.
+Please review our [Privacy Policy](PrivacyPolicy.md) for more details on how we handle user data.
 
 ## Contact
 
