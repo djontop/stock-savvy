@@ -17,6 +17,10 @@ We value your contributions and encourage you to participate by:
 
 This project is licensed under the terms of the **MIT License**. See the [LICENSE](LICENSE) file for more details.
 
+## Privacy Policy
+
+Please review our [Privacy Policy](PRIVACY_POLICY.md) for more details on how we handle user data.
+
 ## Contact
 
 If you have any questions or concerns, feel free to reach out to **Manthan Vasant** via:
