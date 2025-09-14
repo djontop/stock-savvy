@@ -1,57 +1,22 @@
 import streamlit as st
-import google.generativeai as genai # Import Gemini
+from backend.fetch_stock_info import Analyze_stock
 from fpdf import FPDF
 import requests
 import base64
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
-# Load all environment variables from .env file at the start
-load_dotenv()
-
-# --- Page Configuration ---
+# ---------------------- Streamlit Page Config ---------------------- #
 st.set_page_config(
     page_title="StockSavvy",
     page_icon="💲",
 )
 
-# --- NEW: Gemini-Powered Analysis Function ---
-# This function replaces the old backend call
-def Analyze_stock(query, risk_parameter, name):
-    """
-    Analyzes a stock query using the Google Gemini API.
-    """
-    # Configure the Gemini API with your key
-    try:
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    except Exception as e:
-        return f"Error configuring Gemini API. Make sure your GEMINI_API_KEY is set in the .env file. Details: {e}"
-
-    # Create a detailed prompt for the AI model
-    prompt = f"""
-    As an expert financial analyst, analyze the investment query: "{query}" for a user named {name} who has a '{risk_parameter}' risk tolerance.
-
-    Your analysis must be comprehensive and structured. Please include the following sections:
-    1.  **Executive Summary:** A brief overview of the stock and the investment thesis.
-    2.  **Company Overview:** What the company does, its market position, and key business segments.
-    3.  **Financial Health:** A summary of its recent financial performance (revenue, profit, debt).
-    4.  **Risk Analysis:** Based on the user's '{risk_parameter}' risk parameter, outline the potential risks.
-    5.  **Growth Potential:** Discuss potential catalysts for growth and future prospects.
-    6.  **Recommendation:** Conclude with a clear recommendation (e.g., Buy, Hold, Sell, or Further Research Needed), justifying your reasoning based on the analysis and the user's risk profile.
-
-    Provide a professional, data-driven, and easy-to-understand report.
-    """
-
-    try:
-        # Initialize the Gemini model (gemini-1.5-flash is fast and effective)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"An error occurred while analyzing the stock with Gemini: {e}"
+# ---------------------- Title ---------------------- #
+st.title("📈 StockSavvy")
 
 
-# --- Helper Functions (No changes needed here) ---
+# ---------------------- Background Function ---------------------- #
 def add_bg_from_local(image_file):
     with open(image_file, "rb") as image_file:
         encoded_string = base64.b64encode(image_file.read()).decode()
@@ -65,19 +30,8 @@ def add_bg_from_local(image_file):
     """
     st.markdown(bg_image, unsafe_allow_html=True)
 
-def get_financial_news(query):
-    api_key = os.getenv("NEWS_API")
-    if not api_key:
-        st.error("NEWS_API key not found. Please set it in your .env file.")
-        return []
-    modified_query = f"{query} AND (finance OR stock OR company)"
-    url = f"https://newsapi.org/v2/everything?q={modified_query}&apiKey={api_key}"
-    response = requests.get(url)
-    data = response.json()
-    articles = data.get('articles', [])
-    return [article for article in articles if article.get('description')]
 
-# --- Custom CSS Styling ---
+# ---------------------- Custom CSS ---------------------- #
 st.markdown(
     """
     <style>
@@ -86,6 +40,7 @@ st.markdown(
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         color: white;
     }
+
     .stButton>button {
         background-color: #3498db;
         color: white;
@@ -94,90 +49,129 @@ st.markdown(
         padding: 0.5em 1em;
     }
     .stButton>button:hover {
+        background-color: #D3D3D3;
+    }
+
+    .stRadio>div>div>div>label>div:first-child {
+        color: white;
+        font-weight: bold;
+    }
+    .stRadio>div>div>div>label>div:last-child {
+        color: #bdc3c7;
+    }
+    .stRadio>div>div>div>label:hover {
+        background-color: #2c3e50;
+    }
+    .stRadio>div>div>div>label:active {
         background-color: #2980b9;
-        border-color: #2980b9;
     }
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
-# --- Main Application Logic ---
-st.title("📈 StockSavvy")
 
-# Initialize session state for the query text input to enable clearing
-if 'query' not in st.session_state:
-    st.session_state.query = ""
+# ---------------------- Load Environment Variables ---------------------- #
+load_dotenv()
+stock_keys = os.getenv("stock_keys")
 
-def clear_query():
-    st.session_state.query = ""
 
-name = st.text_input("May I know your name?")
+# ---------------------- Helper Functions ---------------------- #
+def get_financial_news(query):
+    api_key = os.getenv("NEWS_API")
+    modified_query = f"{query} AND (finance OR stock OR company)"
+    url = f"https://newsapi.org/v2/everything?q={modified_query}&apiKey={api_key}"
+    response = requests.get(url)
+    data = response.json()
+    articles = data.get('articles', [])
+
+    financial_articles = []
+    for article in articles:
+        if article.get('description'):
+            if 'finance' in article['description'].lower() or 'stock' in article['description'].lower():
+                financial_articles.append(article)
+    return financial_articles
+
+
+def get_realtime_stock_data(symbol, stock_keys):
+    url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={stock_keys}"
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        data = response.json()
+        if "Global Quote" in data:
+            return data["Global Quote"]
+        else:
+            return None
+    else:
+        st.error("Failed to fetch real-time data. Please try again later.")
+        return None
+
+
+# ---------------------- Main App ---------------------- #
+name = st.text_input("May I know your name ?")
 
 if name:
     st.session_state["user_name"] = name
-    
+
     st.markdown(f"### Hello, {name}!")
-    st.markdown("Enter a stock symbol or company name to get a detailed analysis.")
-    
-    # Use the session state key for the text input
-    query = st.text_input('💬 Input your investment query:', key="query")
-    risk_parameter = st.radio("📊 Select Your Risk Tolerance", ["Low", "Medium", "High"])
+    st.markdown("Please feel free to submit any questions or inquiries related to investments.")
 
-    col1, col2, col3, col4 = st.columns([1.5, 1.5, 1.5, 5])
+    query = st.text_input('💬 Input the investment query related to a stock:')
+    risk_parameter = st.radio("📊 Select Risk Parameter", ["Low", "Medium", "High"])
 
-    with col1:
-        generate_button = st.button("🚀 Generate Analysis")
+    col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
 
     with col2:
-        news_button = st.button("📰 Fetch News")
+        enter_button = st.button("🚀 Generate")
+
+    with col1:
+        news_button = st.button("📰 News")
 
     with col3:
-        # The 'on_click' callback is the correct way to clear a widget
-        st.button("🔄 Clear", on_click=clear_query)
+        clear_button = st.button("🔄 Clear")
 
-    if generate_button:
+    # ---------------------- Generate Analysis ---------------------- #
+    if enter_button:
         if query:
-            with st.spinner('⏳ Analyzing with Gemini... Please wait.'):
-                # Call the NEW Gemini-powered function directly
+            with st.spinner('⏳ Gathering all required information and analyzing. Please wait...'):
                 out = Analyze_stock(query, risk_parameter, name)
-            
-            st.success('✅ Analysis Complete!')
+
+            st.success('✅ Done!')
             st.write(out)
-            
-            # --- PDF Generation Logic ---
+
+            # PDF Generation
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
-            # Encode to latin-1 and replace unknown characters to prevent FPDF errors
-            cleaned_out = out.encode('latin-1', 'replace').decode('latin-1')
+            cleaned_out = out.replace('\u20b9', 'Rs.')
             pdf.multi_cell(0, 10, txt=cleaned_out)
             pdf_output = pdf.output(dest='S').encode('latin-1')
-            
-            with col4:
-                 st.download_button(
-                    label="📥 Download Report",
-                    data=pdf_output,
-                    file_name=f"{query.replace(' ', '_')}_Analysis.pdf",
+
+            with col5:
+                st.download_button(
+                    'Download Report',
+                    pdf_output,
+                    file_name="Report.pdf",
                     mime="application/octet-stream"
                 )
-        else:
-            st.warning('⚠️ Please input a query to generate an analysis.')
 
-    if news_button:
+    # ---------------------- Show News ---------------------- #
+    elif news_button:
         if query:
-            with st.spinner('📰 Fetching the latest news...'):
-                financial_articles = get_financial_news(query)
+            financial_articles = get_financial_news(query)
             if financial_articles:
-                st.subheader(f"Financial News for: {query}")
-                for article in financial_articles[:5]: # Show top 5 articles
-                    st.write(f"**[{article['title']}]({article['url']})**")
-                    st.caption(f"Source: {article['source']['name']}")
-                    st.markdown("---")
+                st.subheader("Financial News:")
+                for article in financial_articles:
+                    st.write(f"- [{article['title']}]({article['url']})")
             else:
-                st.warning("No relevant financial news articles were found.")
+                st.warning("No financial news articles found for the given query.")
         else:
-            st.warning('⚠️ Please input a query to fetch news.')
+            st.warning('⚠ Please input your query before clicking News.')
+
+    # ---------------------- Clear Input ---------------------- #
+    if clear_button:
+        query = ''
 
 else:
-    st.info("👋 Please enter your name to begin.")
+    st.write("👋 Please enter your name to continue.")
