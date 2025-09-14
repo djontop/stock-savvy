@@ -4,7 +4,8 @@ from fpdf import FPDF
 import requests
 import base64
 import os
-from dotenv import load_dotenv, dotenv_values
+from dotenv import load_dotenv
+from google import genai
 
 # ---------------------- Streamlit Page Config ---------------------- #
 st.set_page_config(
@@ -14,7 +15,6 @@ st.set_page_config(
 
 # ---------------------- Title ---------------------- #
 st.title("📈 StockSavvy")
-
 
 # ---------------------- Background Function ---------------------- #
 def add_bg_from_local(image_file):
@@ -29,7 +29,6 @@ def add_bg_from_local(image_file):
     </style>
     """
     st.markdown(bg_image, unsafe_allow_html=True)
-
 
 # ---------------------- Custom CSS ---------------------- #
 st.markdown(
@@ -70,11 +69,16 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ---------------------- Load Environment Variables ---------------------- #
 load_dotenv()
 stock_keys = os.getenv("stock_keys")
 
+# Initialize Gemini client for news analysis
+try:
+    gemini_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+except Exception as e:
+    st.error(f"Failed to initialize Gemini client: {e}")
+    gemini_client = None
 
 # ---------------------- Helper Functions ---------------------- #
 def get_financial_news(query):
@@ -92,6 +96,41 @@ def get_financial_news(query):
                 financial_articles.append(article)
     return financial_articles
 
+def analyze_news_sentiment_with_gemini(articles, query):
+    """
+    Analyze news sentiment using Gemini API
+    """
+    if not gemini_client or not articles:
+        return "No news analysis available."
+    
+    try:
+        # Prepare news content for analysis
+        news_content = ""
+        for i, article in enumerate(articles[:5]):  # Analyze top 5 articles
+            news_content += f"{i+1}. {article.get('title', 'No title')}: {article.get('description', 'No description')}\n"
+        
+        prompt = f"""Analyze the sentiment and key insights from the following financial news related to "{query}":
+
+        News Articles:
+        {news_content}
+
+        Please provide:
+        1. Overall sentiment (Positive/Negative/Neutral)
+        2. Key themes or trends mentioned
+        3. Potential impact on stock/investment decisions
+        4. Brief summary of important points
+
+        Keep the analysis concise and focused on investment implications."""
+        
+        response = gemini_client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=prompt
+        )
+        
+        return response.text
+    
+    except Exception as e:
+        return f"Error analyzing news sentiment: {str(e)}"
 
 def get_realtime_stock_data(symbol, stock_keys):
     url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={stock_keys}"
@@ -106,7 +145,6 @@ def get_realtime_stock_data(symbol, stock_keys):
     else:
         st.error("Failed to fetch real-time data. Please try again later.")
         return None
-
 
 # ---------------------- Main App ---------------------- #
 name = st.text_input("May I know your name ?")
@@ -156,14 +194,24 @@ if name:
                     mime="application/octet-stream"
                 )
 
-    # ---------------------- Show News ---------------------- #
+    # ---------------------- Show News with Gemini Analysis ---------------------- #
     elif news_button:
         if query:
             financial_articles = get_financial_news(query)
             if financial_articles:
-                st.subheader("Financial News:")
-                for article in financial_articles:
+                st.subheader("📰 Financial News:")
+                
+                # Display articles
+                for article in financial_articles[:5]:  # Show top 5 articles
                     st.write(f"- [{article['title']}]({article['url']})")
+                
+                # Add Gemini sentiment analysis
+                st.subheader("🤖 AI News Analysis:")
+                with st.spinner('Analyzing news sentiment...'):
+                    sentiment_analysis = analyze_news_sentiment_with_gemini(financial_articles, query)
+                
+                st.write(sentiment_analysis)
+                
             else:
                 st.warning("No financial news articles found for the given query.")
         else:
@@ -171,7 +219,7 @@ if name:
 
     # ---------------------- Clear Input ---------------------- #
     if clear_button:
-        query = ''
+        st.experimental_rerun()
 
 else:
     st.write("👋 Please enter your name to continue.")
