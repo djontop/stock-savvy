@@ -8,8 +8,8 @@ fpdf
 requests
 python-dotenv
 langchain
+langchain-core
+langchain-community
 openai
 scikit-learn
 numpy
-langchain-community
-langchain-core
