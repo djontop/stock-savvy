@@ -4,8 +4,13 @@ from bs4 import BeautifulSoup
 import re
 import requests
 from dotenv import load_dotenv
-from langchain.llms import OpenAI
-from langchain.agents import load_tools, AgentType, Tool, initialize_agent
+# from langchain.llms import OpenAI
+# from langchain.agents import load_tools, AgentType, Tool, initialize_agent
+# Updated imports
+from langchain_community.llms import OpenAI
+from langchain_community.agent_toolkits.load_tools import load_tools
+from langchain.agents import AgentType, Tool, initialize_agent
+
 import yfinance as yf
 
 import openai
