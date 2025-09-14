@@ -1,5 +1,5 @@
 import streamlit as st
-from backend.fetch_stock_info import Analyze_stock
+from backend.fetch_stock_info import analyze_stock
 from fpdf import FPDF
 import requests
 import base64
@@ -135,7 +135,7 @@ if name:
     if enter_button:
         if query:
             with st.spinner('⏳ Gathering all required information and analyzing. Please wait...'):
-                out = Analyze_stock(query, risk_parameter, name)
+                out = analyze_stock(query, risk_parameter, name)
 
             st.success('✅ Done!')
             st.write(out)
