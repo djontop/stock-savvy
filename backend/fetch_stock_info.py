@@ -126,7 +126,7 @@ def get_stock_ticker(query):
     company_ticker = arguments["ticker_symbol"]
     return company_name,company_ticker
 
-def Analyze_stock(query, risk, name):
+def analyze_stock(query, risk, name):
     Company_name,ticker=get_stock_ticker(query)
     print({"Query":query,"Company_name":Company_name,"Ticker":ticker})
     stock_data=get_stock_price(ticker,history=10)
