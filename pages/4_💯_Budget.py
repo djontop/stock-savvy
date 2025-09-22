@@ -60,6 +60,119 @@ class GeminiLLM:
             st.error(f"Error calling Gemini API: {str(e)}")
             return "I apologize, but I encountered an error processing your request. Please check your API configuration and try again."
 
+    def get_price_target_analysis(self, stock_symbol, current_price, technical_data, risk_factor):
+        """Get AI-powered price target analysis from Gemini"""
+        try:
+            # Prepare technical data summary
+            tech_summary = {
+                'rsi': technical_data.get('RSI', 50),
+                'macd': technical_data.get('MACD', 0),
+                'volatility': technical_data.get('volatility', 0.02),
+                'trend_20d': technical_data.get('Trend_20d', 0),
+                'bb_position': technical_data.get('BB_Position', 0.5),
+                'volume_ratio': technical_data.get('Volume_Ratio_5', 1.0)
+            }
+            
+            price_analysis_prompt = f"""
+            As a senior quantitative analyst, provide a precise price target analysis for {stock_symbol}.
+            
+            CURRENT DATA:
+            - Stock Symbol: {stock_symbol}
+            - Current Price: {current_price:.2f}
+            - Risk Profile: {risk_factor}
+            
+            TECHNICAL INDICATORS:
+            - RSI: {tech_summary['rsi']:.1f}
+            - MACD: {tech_summary['macd']:.3f}
+            - Volatility: {tech_summary['volatility']:.4f}
+            - 20-day Trend: {tech_summary['trend_20d']}
+            - Bollinger Band Position: {tech_summary['bb_position']:.2f}
+            - Volume Ratio: {tech_summary['volume_ratio']:.2f}
+            
+            ANALYSIS REQUIREMENTS:
+            1. Calculate a 3-month price target range (conservative, base case, optimistic)
+            2. Provide 6-month price target
+            3. Identify key resistance and support levels
+            4. Consider current market conditions and sector trends
+            5. Factor in the specified risk profile
+            
+            RESPONSE FORMAT (be precise with numbers):
+            3-Month Target: X.XX - Y.YY (Base: Z.ZZ)
+            6-Month Target: A.AA
+            Support Level: B.BB
+            Resistance Level: C.CC
+            Confidence: High/Medium/Low
+            Key Factors: [Brief list of 2-3 key factors]
+            
+            Keep response concise and data-driven. Provide specific price numbers.
+            """
+            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=price_analysis_prompt
+            )
+            
+            # Parse the response to extract price targets
+            return self._parse_price_targets(response.text, current_price)
+            
+        except Exception as e:
+            st.warning(f"Error in Gemini price analysis for {stock_symbol}: {str(e)}")
+            return self._default_price_analysis(current_price)
+    
+    def _parse_price_targets(self, response_text, current_price):
+        """Parse Gemini response to extract structured price data"""
+        import re
+        
+        try:
+            # Initialize default values
+            result = {
+                'gemini_analysis': response_text,
+                'target_3m_low': current_price * 0.95,
+                'target_3m_base': current_price * 1.02,
+                'target_3m_high': current_price * 1.08,
+                'target_6m': current_price * 1.05,
+                'support_level': current_price * 0.92,
+                'resistance_level': current_price * 1.12,
+                'confidence': 'Medium'
+            }
+            
+            # Extract price targets using regex
+            price_pattern = r'\$(\d+\.?\d*)'
+            prices = [float(match) for match in re.findall(price_pattern, response_text)]
+            
+            # Try to map prices to specific targets (basic parsing)
+            if len(prices) >= 6:
+                result['target_3m_low'] = prices[0]
+                result['target_3m_high'] = prices[1] 
+                result['target_3m_base'] = prices[2] if len(prices) > 2 else (prices[0] + prices[1]) / 2
+                result['target_6m'] = prices[3] if len(prices) > 3 else prices[1]
+                result['support_level'] = prices[4] if len(prices) > 4 else min(prices[:2])
+                result['resistance_level'] = prices[5] if len(prices) > 5 else max(prices[:2])
+            
+            # Extract confidence level
+            if 'High' in response_text and 'Confidence' in response_text:
+                result['confidence'] = 'High'
+            elif 'Low' in response_text and 'Confidence' in response_text:
+                result['confidence'] = 'Low'
+            
+            return result
+            
+        except Exception as e:
+            return self._default_price_analysis(current_price)
+    
+    def _default_price_analysis(self, current_price):
+        """Default price analysis when parsing fails"""
+        return {
+            'gemini_analysis': 'Price analysis unavailable',
+            'target_3m_low': current_price * 0.95,
+            'target_3m_base': current_price * 1.02,
+            'target_3m_high': current_price * 1.08,
+            'target_6m': current_price * 1.05,
+            'support_level': current_price * 0.92,
+            'resistance_level': current_price * 1.12,
+            'confidence': 'Low'
+        }
+
 class AdvancedStockAnalyzer:
     def __init__(self):
         self.models = {}
@@ -485,66 +598,126 @@ class AdvancedStockAnalyzer:
         
         return model, scaler, evaluation_metrics
     
-    def get_prediction(self, stock_symbol, model, scaler, risk_factor):
-        """Get prediction for a single stock"""
-        try:
-            # Download recent data
-            end_date = datetime.datetime.now()
-            start_date = end_date - datetime.timedelta(days=365)
-            
-            stock_data = yf.download(stock_symbol, start=start_date, end=end_date, progress=False)
-            
-            if len(stock_data) < 50:
+    def get_prediction(self, stock_symbol, model, scaler, risk_factor, llm=None):
+            """Get prediction for a single stock"""
+            try:
+                # Download recent data
+                end_date = datetime.datetime.now()
+                start_date = end_date - datetime.timedelta(days=365)
+                
+                stock_data = yf.download(stock_symbol, start=start_date, end=end_date, progress=False)
+                
+                if len(stock_data) < 50:
+                    return self._default_prediction()
+                
+                # Calculate features
+                df = self.calculate_advanced_features(stock_data)
+                features, _ = self.prepare_features(df)
+                
+                # Get latest features
+                latest_features = features.iloc[-1:].values
+                
+                if np.isnan(latest_features).any():
+                    return self._default_prediction()
+                
+                # Scale and predict
+                latest_features_scaled = scaler.transform(latest_features)
+                prediction = model.predict(latest_features_scaled)[0]
+                probabilities = model.predict_proba(latest_features_scaled)[0]
+                
+                # Risk adjustment
+                volatility = df['Volatility_20d'].iloc[-1] if 'Volatility_20d' in df.columns else 0.02
+                risk_adjustment = self._apply_risk_filter(prediction, probabilities, volatility, risk_factor)
+                
+                recommendation_map = {0: 'Hold', 1: 'Buy', 2: 'Strong Buy'}
+                
+                # --- ML MODEL TARGET PRICE CALCULATION ---
+                ml_target_data = self._calculate_ml_target_price(
+                    df['Adj Close'].iloc[-1], 
+                    risk_adjustment, 
+                    risk_factor, 
+                    volatility
+                )
+                # --- END ML TARGET PRICE ---
+                
+                # --- GEMINI PRICE ANALYSIS ---
+                gemini_price_data = {}
+                if llm is not None:
+                    # Prepare technical data for Gemini
+                    technical_data = {
+                        'RSI': df['RSI'].iloc[-1] if 'RSI' in df.columns else 50,
+                        'MACD': df['MACD'].iloc[-1] if 'MACD' in df.columns else 0,
+                        'volatility': volatility,
+                        'Trend_20d': df['Trend_20d'].iloc[-1] if 'Trend_20d' in df.columns else 0,
+                        'BB_Position': df['BB_Position'].iloc[-1] if 'BB_Position' in df.columns else 0.5,
+                        'Volume_Ratio_5': df['Volume_Ratio_5'].iloc[-1] if 'Volume_Ratio_5' in df.columns else 1.0
+                    }
+                    
+                    gemini_price_data = llm.get_price_target_analysis(
+                        stock_symbol, 
+                        df['Adj Close'].iloc[-1], 
+                        technical_data, 
+                        risk_factor
+                    )
+                else:
+                    # Default Gemini data when LLM not available
+                    current_price = df['Adj Close'].iloc[-1]
+                    gemini_price_data = {
+                        'gemini_analysis': 'Gemini analysis not available',
+                        'target_3m_low': current_price * 0.95,
+                        'target_3m_base': current_price * 1.02,
+                        'target_3m_high': current_price * 1.08,
+                        'target_6m': current_price * 1.05,
+                        'support_level': current_price * 0.92,
+                        'resistance_level': current_price * 1.12,
+                        'confidence': 'N/A'
+                    }
+                # --- END GEMINI PRICE ANALYSIS ---
+
+                return {
+                    'prediction': prediction,
+                    'recommendation': recommendation_map.get(risk_adjustment, 'Hold'),
+                    'confidence': max(probabilities),
+                    'probabilities': {
+                        'Hold': probabilities[0],
+                        'Buy': probabilities[1] if len(probabilities) > 1 else 0,
+                        'Strong Buy': probabilities[2] if len(probabilities) > 2 else 0
+                    },
+                    'volatility': volatility,
+                    'risk_score': self._calculate_risk_score(volatility, risk_factor),
+                    'ml_target_price': ml_target_data['target_price'],
+                    'ml_target_range': ml_target_data['target_range'],
+                    'ml_price_confidence': ml_target_data['confidence'],
+                    'gemini_price_data': gemini_price_data
+                }
+                
+            except Exception as e:
+                st.warning(f"Error predicting {stock_symbol}: {str(e)}")
                 return self._default_prediction()
             
-            # Calculate features
-            df = self.calculate_advanced_features(stock_data)
-            features, _ = self.prepare_features(df)
-            
-            # Get latest features
-            latest_features = features.iloc[-1:].values
-            
-            if np.isnan(latest_features).any():
-                return self._default_prediction()
-            
-            # Scale and predict
-            latest_features_scaled = scaler.transform(latest_features)
-            prediction = model.predict(latest_features_scaled)[0]
-            probabilities = model.predict_proba(latest_features_scaled)[0]
-            
-            # Risk adjustment
-            volatility = df['Volatility_20d'].iloc[-1] if 'Volatility_20d' in df.columns else 0.02
-            risk_adjustment = self._apply_risk_filter(prediction, probabilities, volatility, risk_factor)
-            
-            recommendation_map = {0: 'Hold', 1: 'Buy', 2: 'Strong Buy'}
-            
-            return {
-                'prediction': prediction,
-                'recommendation': recommendation_map.get(risk_adjustment, 'Hold'),
-                'confidence': max(probabilities),
-                'probabilities': {
-                    'Hold': probabilities[0],
-                    'Buy': probabilities[1] if len(probabilities) > 1 else 0,
-                    'Strong Buy': probabilities[2] if len(probabilities) > 2 else 0
-                },
-                'volatility': volatility,
-                'risk_score': self._calculate_risk_score(volatility, risk_factor)
-            }
-            
-        except Exception as e:
-            st.warning(f"Error predicting {stock_symbol}: {str(e)}")
-            return self._default_prediction()
-    
     def _default_prediction(self):
-        """Return default prediction when analysis fails"""
-        return {
-            'prediction': 0,
-            'recommendation': 'Hold',
-            'confidence': 0.5,
-            'probabilities': {'Hold': 0.6, 'Buy': 0.3, 'Strong Buy': 0.1},
-            'volatility': 0.02,
-            'risk_score': 'Unknown'
-        }
+            """Return default prediction when analysis fails"""
+            return {
+                'prediction': 0,
+                'recommendation': 'Hold',
+                'confidence': 0.5,
+                'probabilities': {'Hold': 0.6, 'Buy': 0.3, 'Strong Buy': 0.1},
+                'volatility': 0.02,
+                'risk_score': 'Unknown',
+                'ml_target_price': 0.0,
+                'ml_target_range': {'low': 0.0, 'high': 0.0},
+                'ml_price_confidence': 'Low',
+                'gemini_price_data': {
+                    'gemini_analysis': 'Analysis unavailable',
+                    'target_3m_low': 0.0,
+                    'target_3m_base': 0.0,
+                    'target_3m_high': 0.0,
+                    'target_6m': 0.0,
+                    'support_level': 0.0,
+                    'resistance_level': 0.0,
+                    'confidence': 'N/A'
+                }
+            }
     
     def download_stock_data_safely(self, symbol, start_date, end_date):
         """Safely download stock data with multiple attempts"""
@@ -630,6 +803,65 @@ class AdvancedStockAnalyzer:
         }
         
         return compatibility.get((risk_preference, risk_level), risk_level)
+
+    def _calculate_ml_target_price(self, current_price, prediction, risk_factor, volatility):
+        """Calculate ML-based target price with confidence ranges"""
+        
+        # Base return thresholds used in model training
+        base_threshold = {
+            'Low': 0.015,     # 1.5% for conservative
+            'Medium': 0.025,  # 2.5% for moderate
+            'High': 0.035     # 3.5% for aggressive
+        }[risk_factor]
+        
+        # Volatility adjustment factor
+        vol_adjustment = 1.0
+        if volatility > 0.05:  # High volatility
+            vol_adjustment = 1.2  # Increase target for high volatility
+        elif volatility < 0.02:  # Low volatility
+            vol_adjustment = 0.8  # Decrease target for low volatility
+        
+        adjusted_threshold = base_threshold * vol_adjustment
+        
+        # Calculate target price based on ML prediction
+        if prediction == 0:  # Hold
+            target_price = current_price
+            target_range = {
+                'low': current_price * (1 - adjusted_threshold/2),
+                'high': current_price * (1 + adjusted_threshold/2)
+            }
+            confidence = 'Medium'
+            
+        elif prediction == 1:  # Buy
+            target_price = current_price * (1 + adjusted_threshold)
+            target_range = {
+                'low': current_price * (1 + adjusted_threshold * 0.7),
+                'high': current_price * (1 + adjusted_threshold * 1.3)
+            }
+            confidence = 'High' if volatility < 0.03 else 'Medium'
+            
+        elif prediction == 2:  # Strong Buy
+            target_price = current_price * (1 + (adjusted_threshold * 2))
+            target_range = {
+                'low': current_price * (1 + adjusted_threshold * 1.5),
+                'high': current_price * (1 + adjusted_threshold * 2.5)
+            }
+            confidence = 'High' if volatility < 0.04 else 'Medium'
+        
+        else:
+            # Fallback
+            target_price = current_price
+            target_range = {'low': current_price * 0.95, 'high': current_price * 1.05}
+            confidence = 'Low'
+        
+        return {
+            'target_price': round(target_price, 2),
+            'target_range': {
+                'low': round(target_range['low'], 2),
+                'high': round(target_range['high'], 2)
+            },
+            'confidence': confidence
+        }
 
 def create_advanced_visualizations(stocks_data, recommendations):
     """Create comprehensive visualizations"""
@@ -749,7 +981,7 @@ def generate_advanced_prompt(recommendations, risk_factor, investment_amount, mo
     As a senior quantitative analyst, provide a comprehensive investment analysis using advanced ML model insights.
     
     PORTFOLIO OVERVIEW:
-    - Investment Amount: ${investment_amount:,.2f}
+    - Investment Amount: {investment_amount:,.2f}
     - Risk Profile: {risk_factor}
     - ML Model Used: {selected_model}
     - Model Accuracy: {model_metrics.get('test_accuracy', 0):.3f}
@@ -774,7 +1006,7 @@ def generate_advanced_prompt(recommendations, risk_factor, investment_amount, mo
     PROVIDE DETAILED ANALYSIS INCLUDING:
     1. Executive Summary: Key insights and overall portfolio assessment
     2. Individual Stock Analysis: Brief analysis of each stock's ML prediction and risk profile
-    3. Portfolio Construction: Specific allocation percentages for ${investment_amount:,.2f}
+    3. Portfolio Construction: Specific allocation percentages for {investment_amount:,.2f}
     4. Risk Management: Entry points, stop-losses, and position sizing
     5. Market Timing: Current market conditions and optimal entry strategy
     6. Expected Returns: Realistic return expectations with timeline
@@ -816,8 +1048,7 @@ def main():
     """, unsafe_allow_html=True)
     
     st.markdown('<h1 class="main-header">🤖 Advanced AI Stock Analyzer</h1>', unsafe_allow_html=True)
-    st.markdown("### *Powered by Machine Learning & Gemini AI*")
-    
+
     # Initialize components
     analyzer = AdvancedStockAnalyzer()
     
@@ -837,7 +1068,7 @@ def main():
         
         # Investment parameters
         investment_amount = st.number_input(
-            "💰 Investment Amount ($)",
+            "💰 Investment Amount",
             min_value=100,
             value=10000,
             step=500,
@@ -891,15 +1122,6 @@ def main():
     # Main Analysis Section
     col1, col2 = st.columns([2, 1])
     
-    with col2:
-        st.markdown("### 🎯 Quick Stats")
-        if stock_symbols:
-            stocks_list = [s.strip().upper() for s in stock_symbols.split(",")]
-            st.metric("Stocks to Analyze", len(stocks_list))
-            st.metric("Investment Amount", f"${investment_amount:,}")
-            st.metric("Risk Level", risk_factor)
-            st.metric("ML Model", ml_model)
-    
     # Analysis Button
     if st.button("🚀 Run Advanced Analysis", type="primary"):
         if not stock_symbols.strip():
@@ -951,7 +1173,7 @@ def main():
             recommendations = {}
             
             for i, stock in enumerate(stocks):
-                prediction_result = analyzer.get_prediction(stock, model, scaler, risk_factor)
+                prediction_result = analyzer.get_prediction(stock, model, scaler, risk_factor, llm)
                 
                 recommendations[stock] = {
                     'recommendation': prediction_result['recommendation'],
@@ -959,7 +1181,11 @@ def main():
                     'probabilities': prediction_result['probabilities'],
                     'volatility': prediction_result['volatility'],
                     'risk_score': prediction_result['risk_score'],
-                    'current_price': stocks_data.get(stock, {}).get('current_price', 0)
+                    'current_price': stocks_data.get(stock, {}).get('current_price', 0),
+                    'ml_target_price': prediction_result['ml_target_price'],
+                    'ml_target_range': prediction_result['ml_target_range'],
+                    'ml_price_confidence': prediction_result['ml_price_confidence'],
+                    'gemini_price_data': prediction_result['gemini_price_data']
                 }
                 
                 progress_bar.progress((len(stocks) * 2 + i + 1) / (len(stocks) * 3))
@@ -996,16 +1222,21 @@ def main():
             # Create recommendations DataFrame
             rec_data = []
             for stock, rec in recommendations.items():
+                # Get Gemini price data safely
+                gemini_data = rec.get('gemini_price_data', {})
+                
                 rec_data.append({
                     'Stock': stock,
                     'Recommendation': rec['recommendation'],
                     'Confidence': f"{rec['confidence']:.3f}",
-                    'Current Price': f"${rec['current_price']:.2f}",
+                    'Current Price': f"{rec['current_price']:.2f}",
+                    'ML Target': f"{rec.get('ml_target_price', 0):.2f}",
+                    'ML Range': f"{rec.get('ml_target_range', {}).get('low', 0):.2f} - {rec.get('ml_target_range', {}).get('high', 0):.2f}",
+                    'Gemini 3M': f"{gemini_data.get('target_3m_base', 0):.2f}",
+                    'Support': f"{gemini_data.get('support_level', 0):.2f}",
+                    'Resistance': f"{gemini_data.get('resistance_level', 0):.2f}",
                     'Volatility': f"{rec['volatility']:.4f}",
-                    'Risk Assessment': rec['risk_score'],
-                    'Hold Prob': f"{rec['probabilities']['Hold']:.2f}",
-                    'Buy Prob': f"{rec['probabilities']['Buy']:.2f}",
-                    'Strong Buy Prob': f"{rec['probabilities']['Strong Buy']:.2f}"
+                    'Risk Assessment': rec['risk_score']
                 })
             
             rec_df = pd.DataFrame(rec_data)
@@ -1021,6 +1252,117 @@ def main():
             
             styled_df = rec_df.style.applymap(color_recommendations, subset=['Recommendation'])
             st.dataframe(styled_df, use_container_width=True)
+            
+            # NEW FEATURE: Detailed Price Target Analysis
+            st.markdown("### 🎯 Advanced Price Target Analysis")
+            
+            # Create tabs for different price analysis views
+            tab1, tab2, tab3 = st.tabs(["📊 Price Targets Overview", "🤖 ML vs Gemini Comparison", "📈 Individual Analysis"])
+            
+            with tab1:
+                st.markdown("#### 🎯 Price Targets Summary")
+                
+                # Create price targets DataFrame
+                price_data = []
+                for stock, rec in recommendations.items():
+                    gemini_data = rec.get('gemini_price_data', {})
+                    ml_range = rec.get('ml_target_range', {})
+                    
+                    price_data.append({
+                        'Stock': stock,
+                        'Current': f"{rec['current_price']:.2f}",
+                        'ML Target': f"{rec.get('ml_target_price', 0):.2f}",
+                        'ML Confidence': rec.get('ml_price_confidence', 'N/A'),
+                        'Gemini 3M Base': f"{gemini_data.get('target_3m_base', 0):.2f}",
+                        'Gemini 6M': f"{gemini_data.get('target_6m', 0):.2f}",
+                        'Gemini Confidence': gemini_data.get('confidence', 'N/A'),
+                        'Support Level': f"{gemini_data.get('support_level', 0):.2f}",
+                        'Resistance Level': f"{gemini_data.get('resistance_level', 0):.2f}"
+                    })
+                
+                price_df = pd.DataFrame(price_data)
+                st.dataframe(price_df, use_container_width=True)
+            
+            with tab2:
+                st.markdown("#### 🤖 ML vs Gemini Price Comparison")
+                
+                # Create comparison chart
+                comparison_data = []
+                for stock, rec in recommendations.items():
+                    gemini_data = rec.get('gemini_price_data', {})
+                    current_price = rec['current_price']
+                    ml_target = rec.get('ml_target_price', current_price)
+                    gemini_target = gemini_data.get('target_3m_base', current_price)
+                    
+                    comparison_data.extend([
+                        {'Stock': stock, 'Source': 'Current', 'Price': current_price},
+                        {'Stock': stock, 'Source': 'ML Target', 'Price': ml_target},
+                        {'Stock': stock, 'Source': 'Gemini 3M', 'Price': gemini_target}
+                    ])
+                
+                comp_df = pd.DataFrame(comparison_data)
+                
+                if not comp_df.empty:
+                    fig_comparison = px.bar(
+                        comp_df, 
+                        x='Stock', 
+                        y='Price', 
+                        color='Source',
+                        title="Price Target Comparison: Current vs ML vs Gemini",
+                        barmode='group'
+                    )
+                    st.plotly_chart(fig_comparison, use_container_width=True)
+            
+            with tab3:
+                st.markdown("#### 📈 Individual Stock Price Analysis")
+                
+                selected_stock_price = st.selectbox(
+                    "Select stock for detailed price analysis:",
+                    options=list(recommendations.keys()),
+                    key="price_analysis_stock"
+                )
+                
+                if selected_stock_price in recommendations:
+                    stock_rec = recommendations[selected_stock_price]
+                    gemini_data = stock_rec.get('gemini_price_data', {})
+                    ml_range = stock_rec.get('ml_target_range', {})
+                    current_price = stock_rec['current_price']
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.markdown("**🤖 ML Analysis**")
+                        st.metric("Target Price", f"{stock_rec.get('ml_target_price', 0):.2f}")
+                        st.metric("Target Range Low", f"{ml_range.get('low', 0):.2f}")
+                        st.metric("Target Range High", f"{ml_range.get('high', 0):.2f}")
+                        st.metric("ML Confidence", stock_rec.get('ml_price_confidence', 'N/A'))
+                    
+                    with col2:
+                        st.markdown("**✨ Gemini Analysis**")
+                        st.metric("3M Base Target", f"{gemini_data.get('target_3m_base', 0):.2f}")
+                        st.metric("3M Range", f"{gemini_data.get('target_3m_low', 0):.2f} - {gemini_data.get('target_3m_high', 0):.2f}")
+                        st.metric("6M Target", f"{gemini_data.get('target_6m', 0):.2f}")
+                        st.metric("Gemini Confidence", gemini_data.get('confidence', 'N/A'))
+                    
+                    with col3:
+                        st.markdown("**📊 Key Levels**")
+                        st.metric("Current Price", f"{current_price:.2f}")
+                        st.metric("Support Level", f"{gemini_data.get('support_level', 0):.2f}")
+                        st.metric("Resistance Level", f"{gemini_data.get('resistance_level', 0):.2f}")
+                        
+                        # Calculate upside potential
+                        ml_upside = ((stock_rec.get('ml_target_price', current_price) - current_price) / current_price) * 100
+                        gemini_upside = ((gemini_data.get('target_3m_base', current_price) - current_price) / current_price) * 100
+                        st.metric("ML Upside", f"{ml_upside:.1f}%")
+                        st.metric("Gemini Upside", f"{gemini_upside:.1f}%")
+                    
+                    # Show Gemini's detailed analysis
+                    if gemini_data.get('gemini_analysis') and gemini_data['gemini_analysis'] != 'Analysis unavailable':
+                        st.markdown("**🧠 Gemini's Detailed Analysis**")
+                        with st.expander("View Full Analysis"):
+                            st.write(gemini_data['gemini_analysis'])
+            
+            # END NEW PRICE TARGET FEATURE
             
             # Model Performance Metrics
             with st.expander("🤖 Model Performance Details"):
@@ -1110,7 +1452,7 @@ def main():
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        st.metric("Current Price", f"${rec['current_price']:.2f}")
+                        st.metric("Current Price", f"{rec['current_price']:.2f}")
                         st.metric("Volatility", f"{rec['volatility']:.4f}")
                     
                     with col2:
@@ -1121,7 +1463,7 @@ def main():
                         stock_info = stocks_data[selected_stock].get('info', {})
                         market_cap = stock_info.get('marketCap', 0)
                         if market_cap:
-                            st.metric("Market Cap", f"${market_cap/1e9:.1f}B")
+                            st.metric("Market Cap", f"{market_cap/1e9:.1f}B")
                         
                         pe_ratio = stock_info.get('forwardPE', 0)
                         if pe_ratio:
@@ -1170,7 +1512,7 @@ def main():
                     allocation_data.append({
                         'Stock': stock,
                         'Allocation %': f"{allocation_pct:.1f}%",
-                        'Amount': f"${allocation_amount:,.2f}",
+                        'Amount': f"{allocation_amount:,.2f}",
                         'Shares (approx)': int(allocation_amount / recommendations[stock]['current_price']),
                         'Recommendation': recommendations[stock]['recommendation']
                     })
@@ -1179,9 +1521,10 @@ def main():
                 st.dataframe(allocation_df, use_container_width=True)
                 
                 # Pie chart of allocation
+# Pie chart of allocation
                 fig_pie = px.pie(
-                    allocation_df, 
-                    values=[float(x.strip(').replace(',', '')) for x in allocation_df['Amount']],
+                    allocation_df,
+                    values=[float(x.strip('$').replace(',', '')) for x in allocation_df['Amount']],
                     names='Stock',
                     title="Suggested Portfolio Allocation"
                 )
@@ -1253,7 +1596,7 @@ def main():
     <div style='text-align: center; color: #666;'>
     <p>⚠️ <strong>Disclaimer:</strong> This analysis is for educational purposes only. 
     Always consult with a financial advisor before making investment decisions.</p>
-    <p>🤖 <strong>Powered by:</strong> Gemini AI, Machine Learning & Technical Analysis</p>
+    <p>🤖 <strong>Powered by:</strong> DJONTOP -  Machine Learning & Technical Analysis</p>
     </div>
     """, unsafe_allow_html=True)
 

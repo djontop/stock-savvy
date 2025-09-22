@@ -16,3 +16,4 @@ streamlit
 ta
 xgboost
 yfinance
+google-generativeai

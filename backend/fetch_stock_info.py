@@ -10,7 +10,7 @@ import warnings
 import os
 warnings.filterwarnings("ignore")
 
-load_dotenv("E:/hackthon/.env")
+load_dotenv("C:/Users/Jai Jalaram/OneDrive/Desktop/stock-savvy/.env")
 
 # Initialize Gemini client
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))

@@ -1,117 +1,156 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import base64
 import plotly.io as pio
 
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
-
-def add_bg_from_local(image_file):
-    with open(image_file, "rb") as image_file:
-        encoded_string = base64.b64encode(image_file.read()).decode()
-    bg_image = f"""
-    <style>
-    .stApp {{
-        background-image: url("data:image/jpg;base64,{encoded_string}");
-        background-size: cover;
-    }}
-    </style>
-    """
-    st.markdown(bg_image, unsafe_allow_html=True)
-
-
-sid = SentimentIntensityAnalyzer()
+# --- Helper Functions ---
 
 @st.cache_data
 def get_stock_data(symbol, start_date, end_date):
+    """
+    Downloads stock data from Yahoo Finance, handles multi-index columns,
+    and validates required columns.
+    """
     try:
-        stock_data = yf.download(symbol, start=start_date, end=end_date)
+        stock_data = yf.download(symbol, start=start_date, end=end_date, progress=False)
         if stock_data.empty:
             st.warning(f"No data found for {symbol} over the selected date range.")
             return None
+        
+        # Flatten columns if yfinance returns a multi-index header
+        if isinstance(stock_data.columns, pd.MultiIndex):
+            stock_data.columns = stock_data.columns.get_level_values(0)
+            
+        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        if not all(col in stock_data.columns for col in required_columns):
+            st.error(f"Data from Yahoo Finance is missing required columns for {symbol}")
+            return None
+            
         return stock_data
     except Exception as e:
         st.error(f"Error fetching stock data for {symbol}: {e}")
         return None
 
-def plot_candlestick_chart(stock_data):
-    fig = go.Figure(data=[go.Candlestick(x=stock_data.index,
-                    open=stock_data['Open'],
-                    high=stock_data['High'],
-                    low=stock_data['Low'],
-                    close=stock_data['Close'])])
+def plot_candlestick_chart(stock_data, symbol):
+    """
+    Creates an interactive candlestick chart for a given stock.
+    """
+    if stock_data is None or len(stock_data) < 2:
+        st.warning("Not enough data to plot a candlestick chart.")
+        return None
+        
+    try:
+        fig = go.Figure(data=[go.Candlestick(
+            x=stock_data.index,
+            open=stock_data['Open'],
+            high=stock_data['High'],
+            low=stock_data['Low'],
+            close=stock_data['Close'],
+            name=symbol
+        )])
+        
+        fig.update_layout(
+            title=f'Candlestick Chart - {symbol}',
+            xaxis_title='Date',
+            yaxis_title='Price (INR)',
+            xaxis_rangeslider_visible=True
+        )
+        return fig
+    except Exception as e:
+        st.error(f"Error creating candlestick chart: {e}")
+        return None
 
-    fig.update_layout(title='Candlestick Chart',
-                      xaxis_title='Date',
-                      yaxis_title='Price (INR)',
-                      xaxis_rangeslider_visible=False)
+def get_chart_download_link(figure, filename, linktext="Download HTML"):
+    """
+    Generates an HTML download link for a Plotly figure.
+    """
+    if figure is None: return ""
+    
+    try:
+        fig_data = pio.to_html(figure, full_html=False, include_plotlyjs='cdn')
+        b64 = base64.b64encode(fig_data.encode()).decode()
+        return f'<a href="data:text/html;base64,{b64}" download="{filename}">{linktext}</a>'
+    except Exception as e:
+        st.error(f"Error generating download link: {e}")
+        return ""
 
-    return fig
-
-def plot_line_chart(stock_data, symbol):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name=symbol))
-
-    fig.update_layout(title='Stock Price Comparison',
-                      xaxis_title='Date',
-                      yaxis_title='Price (INR)')
-
-    return fig
+# --- Main Streamlit App ---
 
 def main():
-    st.title('📈 TimeLine Data Comparison 📈')
+    """
+    The main function that runs the Streamlit application.
+    """
+    st.title('📈 Stock Price Analysis 📈')
 
-    symbols = st.text_input('Enter Stock Symbols (e.g., TCS.NS, INFY.NS):').split(',')
+    # --- User Inputs ---
+    symbols_input = st.text_input('Enter Stock Symbols (e.g., TCS.NS, YESBANK.NS):')
+    symbols = [s.strip().upper() for s in symbols_input.split(',') if s.strip()] if symbols_input else []
+    
     start_date = st.date_input('Start Date:')
     end_date = st.date_input('End Date:')
 
     if start_date >= end_date:
-        st.warning("Enter a valid date range. Atleast one day should be present between start and end date for analysis.")
+        st.warning("The start date must be before the end date.")
         return
 
     if st.button('Get Data'):
-        with st.spinner('⏳ Gathering all required information and analyzing. Please wait...'):
-            if symbols:
-                fig_comparison = go.Figure() 
-                for symbol in symbols:
-                    st.write(f"Fetching data for {symbol.strip()}...")
-                    stock_data = get_stock_data(symbol.strip(), start_date, end_date)
-                    if stock_data is not None:
-                        st.write(f"### Stock Data for {symbol}")
-                        st.write(stock_data)
-
-                        st.subheader("Stock Price Over Time")
-                        fig_stock_price, ax_stock_price = plt.subplots(figsize=(10, 6))
-                        ax_stock_price.plot(stock_data['Close'])    
-                        ax_stock_price.set_xlabel('Date')
-                        ax_stock_price.set_ylabel('Price (INR)')
-                        ax_stock_price.set_title('Stock Price Over Time')
-                        st.pyplot(fig_stock_price)
-
-                        st.subheader("Candlestick Chart")
-                        st.write("This chart shows the open, high, low, and close prices of the stock over time.")
-                        fig_candlestick = plot_candlestick_chart(stock_data)
-                        st.plotly_chart(fig_candlestick)
-
-                        st.markdown(get_chart_download_link(fig_candlestick, f"{symbol}_Candlestick_Chart_Report.html"), unsafe_allow_html=True)
-
-                        fig_comparison.add_trace(go.Scatter(x=stock_data.index, y=stock_data['Close'], mode='lines', name=symbol))
+        if not symbols:
+            st.warning("Please enter at least one stock symbol.")
+            return
+            
+        with st.spinner('⏳ Analyzing...'):
+            fig_comparison = go.Figure()
+            valid_data_found = False
+            
+            # --- Individual Stock Analysis Loop ---
+            for symbol in symbols:
+                st.markdown("---")
+                st.header(f"Analysis for {symbol}")
                 
-                st.subheader("Stock Price Comparison - Line Chart")
-                st.write("This chart compares the closing prices of the selected companies over time.")
-                st.plotly_chart(fig_comparison)
+                stock_data = get_stock_data(symbol, start_date, end_date)
                 
-                st.markdown(get_chart_download_link(fig_comparison, "Companies_Comparison_Line_Chart_Report.html"), unsafe_allow_html=True) 
-            else:
-                st.warning("Please enter at least one stock symbol.")
+                if stock_data is not None and not stock_data.empty:
+                    valid_data_found = True
+                    
+                    st.write(f"### Stock Data for {symbol}")
+                    st.dataframe(stock_data)
+                    st.write(f"Total records found: {len(stock_data)}")
 
-def get_chart_download_link(figure, filename, linktext="Download HTML"):
-    fig_data = pio.to_html(figure, full_html=False)
-    b64 = base64.b64encode(fig_data.encode()).decode()
-    href = f'<a href="data:text/html;base64,{b64}" download="{filename}">{linktext}</a>'
-    return href
+                    st.subheader("Candlestick Chart")
+                    fig_candlestick = plot_candlestick_chart(stock_data, symbol)
+                    if fig_candlestick:
+                        st.plotly_chart(fig_candlestick, use_container_width=True)
+                        st.markdown(get_chart_download_link(fig_candlestick, f"{symbol}_Candlestick_Chart.html"), unsafe_allow_html=True)
+                    
+                    # Add data to the main comparison chart
+                    fig_comparison.add_trace(go.Scatter(
+                        x=stock_data.index, 
+                        y=stock_data['Close'], 
+                        mode='lines', 
+                        name=symbol
+                    ))
+                else:
+                    st.error(f"Could not fetch data for {symbol}.")
+
+            # --- Final Comparison Chart ---
+            if valid_data_found:
+                st.markdown("---")
+                st.header("Stock Price Comparison (Log Scale)")
+                # The yaxis_type="log" modification solves the scaling problem
+                fig_comparison.update_layout(
+                    title='Stock Price Comparison',
+                    xaxis_title='Date',
+                    yaxis_title='Price (INR) - Log Scale',
+                    yaxis_type="log",
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig_comparison, use_container_width=True)
+                st.markdown(get_chart_download_link(fig_comparison, "Comparison_Log_Scale_Chart.html"), unsafe_allow_html=True)
+            elif not valid_data_found:
+                st.error("No valid data was found for any of the provided symbols.")
 
 if __name__ == "__main__":
     main()
